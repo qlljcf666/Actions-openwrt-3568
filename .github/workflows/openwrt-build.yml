@@ -1,131 +1,170 @@
+# 工作流名称：TD22A11 V02 OpenWrt 编译（RK3568芯片）
 name: TD22A11 V02 OpenWrt Build (RK3568)
+
+# 触发方式：
 on:
-  workflow_dispatch:  # 手动触发编译（推荐）
-  # push:  # 可选：提交代码自动触发，注释掉避免误触发
+  workflow_dispatch:  # 手动触发编译（推荐，避免误操作）
+  # push:  # 可选：提交代码到v23.05.4分支且修改.config文件时自动触发
   #   branches: [ v23.05.4 ]
   #   paths:
   #     - '.config'
 
+# 全局环境变量（整个编译流程共用）
 env:
-  REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: v23.05.4
-  FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: .config
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_COWTRANSFER: false
-  UPLOAD_WETRANSFER: false
-  UPLOAD_RELEASE: true
-  TZ: Asia/Shanghai
+  REPO_URL: https://github.com/openwrt/openwrt          # OpenWrt源码仓库地址
+  REPO_BRANCH: v23.05.4                                # 编译的OpenWrt版本分支（23.05.4稳定版）
+  FEEDS_CONF: feeds.conf.default                       # 自定义feeds配置文件名
+  CONFIG_FILE: .config                                 # OpenWrt编译配置文件名
+  DIY_P1_SH: diy-part1.sh                              # 自定义脚本1（feeds修改）
+  DIY_P2_SH: diy-part2.sh                              # 自定义脚本2（设备树/硬件适配）
+  UPLOAD_BIN_DIR: false                                # 是否上传完整bin目录（false=不上传，节省空间）
+  UPLOAD_FIRMWARE: true                                # 是否上传最终固件（true=上传，核心）
+  UPLOAD_COWTRANSFER: false                            # 是否上传到奶牛快传（国内网盘，false=不用）
+  UPLOAD_WETRANSFER: false                             # 是否上传到WeTransfer（国外网盘，false=不用）
+  UPLOAD_RELEASE: true                                 # 是否自动创建Release（true=创建，方便下载）
+  TZ: Asia/Shanghai                                    # 时区（上海，避免编译时间错乱）
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
-    steps:
+  build:  # 定义名为build的任务
+    runs-on: ubuntu-22.04  # 运行环境：GitHub提供的Ubuntu 22.04虚拟机
+    steps:  # 任务执行步骤（按顺序执行）
+    
+    # 步骤1：检出代码（把你仓库里的配置文件拉到虚拟机）
     - name: Checkout
-      uses: actions/checkout@main
-
+      uses: actions/checkout@main  # 使用官方的检出动作
+    
+    # 步骤2：初始化编译环境（安装依赖包）
     - name: Initialization environment
       env:
-        DEBIAN_FRONTEND: noninteractive
+        DEBIAN_FRONTEND: noninteractive  # 禁用Ubuntu交互提示（自动确认）
       run: |
+        # 删除无用文件，释放空间
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        # 更新系统源并升级
         sudo apt update -y
         sudo apt full-upgrade -y
+        # 安装OpenWrt编译必需的依赖包（编译器/工具链/库文件）
         sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pip libpython3-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        # 清理系统缓存，释放空间
         sudo apt autoremove -y && sudo apt clean -y
+        # 设置时区为上海
         sudo timedatectl set-timezone "$TZ"
+        # 删除用户缓存
         echo "Deleting files, please wait..."
         rm -rf $HOME/.cache
-
+    
+    # 步骤3：克隆OpenWrt源码
     - name: Clone source code
       run: |
+        # 深度1克隆（只拉最新版本，节省时间/空间）
         git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+        # 创建软链接（兼容部分脚本路径）
         ln -sf /workdir $GITHUB_WORKSPACE/openwrt
-
+    
+    # 步骤4：加载自定义feeds（扩展包源）
     - name: Load custom feeds
       run: |
+        # 如果有自定义feeds配置，替换源码中的默认配置
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        # 给自定义脚本1加执行权限
         chmod +x $DIY_P1_SH
         cd openwrt
+        # 执行自定义脚本1（本案例中是空脚本，仅兼容）
         $GITHUB_WORKSPACE/$DIY_P1_SH
-
+    
+    # 步骤5：更新feeds（下载扩展包列表）
     - name: Update feeds
       run: |
         cd openwrt
-        ./scripts/feeds update -a
-
+        ./scripts/feeds update -a  # 更新所有feeds
+    
+    # 步骤6：安装feeds（下载扩展包源码）
     - name: Install feeds
       run: |
         cd openwrt
-        ./scripts/feeds install -a
-
+        ./scripts/feeds install -a  # 安装所有feeds
+    
+    # 步骤7：加载自定义配置（核心！适配你的硬件）
     - name: Load custom configuration
       run: |
+        # 如果有自定义文件目录，复制到源码中
         [ -e files ] && mv files openwrt/files
+        # 复制你仓库里的.config到源码目录（编译配置）
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        # 给自定义脚本2加执行权限
         chmod +x $DIY_P2_SH
         cd openwrt
+        # 执行自定义脚本2（替换TD22A11 V02设备树）
         $GITHUB_WORKSPACE/$DIY_P2_SH
-
+    
+    # 步骤8：下载编译依赖包（提前下载，避免编译时卡顿）
     - name: Download package
-      id: package
+      id: package  # 给步骤标记ID，方便后续判断
       run: |
         cd openwrt
-        make defconfig
-        make download -j8
+        make defconfig  # 加载.config配置
+        make download -j8  # 8线程下载依赖包
+        # 查找并删除小于1024字节的损坏文件
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
-
+    
+    # 步骤9：编译固件（核心步骤）
     - name: Compile the firmware
-      id: compile
+      id: compile  # 标记ID
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
+        echo -e "$(nproc) thread compile"  # 打印编译线程数（虚拟机核心数）
+        # 优先多线程编译，失败则单线程重试，再失败则单线程详细输出（排错）
         make -j$(nproc) || make -j1 || make -j1 V=s
+        # 标记编译成功
         echo "status=success" >> $GITHUB_OUTPUT
+        # 提取设备名称（用于命名固件）
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        # 生成编译时间（用于命名固件）
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-
+    
+    # 步骤10：检查磁盘空间（排错用）
     - name: Check space usage
-      if: (!cancelled())
-      run: df -h
-
+      if: (!cancelled())  # 任务未取消时执行
+      run: df -h  # 查看磁盘使用情况
+    
+    # 步骤11：上传完整bin目录（本案例禁用）
     - name: Upload bin directory
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@main  # 上传文件到Actions
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
-
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}  # 文件名
+        path: openwrt/bin  # 上传路径
+    
+    # 步骤12：整理固件文件（只保留核心固件，删除无用包）
     - name: Organize files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()  # 启用上传且任务未取消
       run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
-
+        cd openwrt/bin/targets/*/*  # 进入固件输出目录
+        rm -rf packages  # 删除packages目录（扩展包，固件用不到）
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV  # 记录固件目录路径
+        echo "status=success" >> $GITHUB_OUTPUT  # 标记整理成功
+    
+    # 步骤13：上传固件到Actions（核心！下载固件的入口）
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
-
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}  # 固件包名称
+        path: ${{ env.FIRMWARE }}  # 上传固件目录
+    
+    # 步骤14：上传固件到Release（方便分享/下载）
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@master
+      uses: softprops/action-gh-release@master  # 自动创建Release
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动生成的令牌（权限）
       with:
-        tag_name: OpenWrt-${{ env.FILE_DATE }}
-        files: ${{ env.FIRMWARE }}/*
-        body: |
+        tag_name: OpenWrt-${{ env.FILE_DATE }}  # Release标签（带时间）
+        files: ${{ env.FIRMWARE }}/*  # 上传所有固件文件
+        body: |  # Release描述
           TD22A11 V02 (OneBox E02/R07 Pro) OpenWrt 23.05.4 云编译固件
           - 适配 RK3568 芯片
           - 双千兆网口（RTL8111H）
